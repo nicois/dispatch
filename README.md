@@ -1,4 +1,5 @@
 # Dispatch
+[![Go Reference](https://pkg.go.dev/badge/github.com/nicois/dispatch.svg)](https://pkg.go.dev/github.com/nicois/dispatch)
 
 Run multiple variations of a command, controlling concurrency, retries, etc.
 
