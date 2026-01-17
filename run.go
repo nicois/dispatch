@@ -3,13 +3,13 @@ package dispatch
 import (
 	"context"
 	"errors"
-	"html/template"
 	"io"
 	"log/slog"
 	"math/rand"
 	"os"
 	"sync"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/google/btree"

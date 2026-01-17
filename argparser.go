@@ -3,10 +3,10 @@ package dispatch
 import (
 	"context"
 	"fmt"
-	"html/template"
 	"io"
 	"iter"
 	"strings"
+	"text/template"
 )
 
 type RenderedCommand struct {
@@ -17,11 +17,6 @@ type RenderedCommand struct {
 type (
 	RenderArgs map[string]string
 )
-
-type TemplateArgParser struct {
-	command []*template.Template
-	reader  io.Reader
-}
 
 // Generator will process the incoming data stream, generating rendered commands
 // until either it runs out of input or the context is cancelled. If a fatal error
