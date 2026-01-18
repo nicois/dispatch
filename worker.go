@@ -68,7 +68,7 @@ func Marker(cmd RenderedCommand) string {
 	if cmd.input != "" {
 		h.Write([]byte(cmd.input))
 	}
-	return fmt.Sprintf("%x.zstd", h.Sum(nil))
+	return fmt.Sprintf("%x.zstd", h.Sum(nil)[:10])
 }
 
 type Stats struct {
