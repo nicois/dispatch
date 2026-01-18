@@ -254,7 +254,7 @@ Jan 18 11:11:18.859 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Abor
 
 If bursting is acceptable, `--rate-limit-bucket-size` allows this.
 
-For example, if you want to issue some API commands, ensuring no more than 1 is started per second, with a burst of 3 (but allowing 10 to run concurrently):
+For example, if you want to issue some API commands, ensuring no more than 1 is started per second, with a burst of 3 (but allowing 4 to run concurrently):
 
 ```bash
 $ seq 1 5 | dispatch --rate-limit 1s --concurrency 4 --rate-limit-bucket-size 3
