@@ -1,4 +1,5 @@
 # Dispatch
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/nicois/dispatch.svg)](https://pkg.go.dev/github.com/nicois/dispatch)
 
 Run multiple variations of a command, controlling concurrency, retries, etc.
@@ -32,9 +33,6 @@ The binary will be installed into `~/go/bin/`
 ## Usage
 
 ```
-Usage:
-  dispatch [OPTIONS]
-
 preparation:
       --csv                     interpret STDIN as a CSV
       --debounce-failures=      re-run failed jobs outside the debounce period, even if they would normally be skipped
@@ -49,7 +47,7 @@ preparation:
 execution:
       --abort-on-error          stop running (as though CTRL-C were pressed) if a job fails
       --cache-location=         path (or S3 URI) to record successes and failures
-      --concurrency=            run this many jobs in dispatch (default: 10)
+      --concurrency=            run this many jobs in dispatch (default: 1)
       --dry-run                 simulate what would be run
       --input=                  send the input string (plus newline) forever as STDIN to each job
       --rate-limit=             prevent jobs starting more than this often
@@ -60,8 +58,8 @@ output:
       --debug                   show more detailed log messages
       --hide-failures           do not display a message each time a job fails
       --hide-successes          do not display a message each time a job succeeds
-      --show-stderr             send a copy of each job's STDERR to the console
-      --show-stdout             send a copy of each job's STDOUT to the console
+      --show-stderr             do not suppress each job's STDERR
+      --show-stdout             do not suppress each job's STDOUT
 ```
 
 ## Examples
@@ -73,44 +71,48 @@ Run three variations of `echo`, substituting `{{.value}}` with each input line i
 ```bash
 $ echo -e 'one\ntwo\nthree' \
     | dispatch -- echo {{.value}}
-Dec 22 08:09:29.670 INF Success command="{command:[echo three] input:}" "combined output"="three\n"
-Dec 22 08:09:29.670 INF Success command="{command:[echo two] input:}" "combined output"="two\n"
-Dec 22 08:09:29.670 INF Success command="{command:[echo one] input:}" "combined output"="one\n"
-Dec 22 08:09:29.670 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3; Elapsed time: 0s
+Jan 18 11:05:56.641 INF Success elapsed="3 milliseconds" command="{command:[echo one] input:}" "output ID"=b25ca1783749afbf505d.zstd
+Jan 18 11:05:56.642 INF Success elapsed="1 milliseconds" command="{command:[echo two] input:}" "output ID"=504748d73ba659fbbfef.zstd
+Jan 18 11:05:56.643 INF Success elapsed="1 milliseconds" command="{command:[echo three] input:}" "output ID"=094fe78ba1fdf4664bf3.zstd
+Jan 18 11:05:56.643 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3; Estimated time remaining: 0 milliseconds
 ```
 
-In fact, if `dispatch` is run without supplying a command, it does the same thing:
+The stdout and stderr are combined and stored (compressed using zstd) in `~/.cache/dispatch/{success,failure}/*`
+
+If you want a copy of stderr and stdout to be shown:
 
 ```bash
-$ echo -e 'one\ntwo\nthree' | dispatch
-Dec 22 08:10:00.810 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:10:00.914 INF Success command="{command:[echo value is two] input:}" "combined output"="value is two\n"
-Dec 22 08:10:00.914 INF Success command="{command:[echo value is one] input:}" "combined output"="value is one\n"
-Dec 22 08:10:00.914 INF Success command="{command:[echo value is three] input:}" "combined output"="value is three\n"
-Dec 22 08:10:00.914 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3; Elapsed time: 0s
+$ echo -e 'one\ntwo\nthree' \
+    | dispatch --show-stdout --show-stderr -- echo {{.value}}
+one
+Jan 18 11:06:13.798 INF Success elapsed="1 milliseconds" command="{command:[echo one] input:}" "output ID"=b25ca1783749afbf505d.zstd
+two
+Jan 18 11:06:13.799 INF Success elapsed="1 milliseconds" command="{command:[echo two] input:}" "output ID"=504748d73ba659fbbfef.zstd
+three
+Jan 18 11:06:13.800 INF Success elapsed="1 milliseconds" command="{command:[echo three] input:}" "output ID"=094fe78ba1fdf4664bf3.zstd
+Jan 18 11:06:13.801 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3; Estimated time remaining: 0 milliseconds
 ```
 
 #### JSON parsing
 
-Parse each input line as a JSON object
+Parse each input line as a JSON object (also suppressing the "Success" log entries:
 
 ```bash
 $ echo -e '{"animal": "cat", "name": "Scarface Claw"}\n{"animal": "dog", "name": "Bitzer Maloney"}' \
-    | dispatch --json-line -- echo the {{.animal}} is called {{.name}}
-Dec 22 08:10:19.143 INF Success command="{command:[echo the cat is called Scarface Claw] input:}" "combined output"="the cat is called Scarface Claw\n"
-Dec 22 08:10:19.143 INF Success command="{command:[echo the dog is called Bitzer Maloney] input:}" "combined output"="the dog is called Bitzer Maloney\n"
-Dec 22 08:10:19.144 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Elapsed time: 0s
+    | dispatch --json-line --hide-successes --show-stdout -- echo the {{.animal}} is called {{.name}}
+the cat is called Scarface Claw
+the dog is called Bitzer Maloney
+Jan 18 10:46:26.424 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 ```
 
 #### CSV parsing
 
 ```bash
 $ echo -e 'animal,name\ncat,Scarface Claw\ndog,Bitzer Maloney' \
-    | dispatch --csv -- echo the {{.animal}} is called {{.name}}
-Dec 22 08:10:41.909 INF Success command="{command:[echo the cat is called Scarface Claw] input:}" "combined output"="the cat is called Scarface Claw\n"
-Dec 22 08:10:41.909 INF Success command="{command:[echo the dog is called Bitzer Maloney] input:}" "combined output"="the dog is called Bitzer Maloney\n"
-Dec 22 08:10:41.909 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Elapsed time: 0s
-
+    | dispatch --csv --hide-successes --show-stdout -- echo the {{.animal}} is called {{.name}}
+the cat is called Scarface Claw
+the dog is called Bitzer Maloney
+Jan 18 10:47:53.144 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 ```
 
 #### Status logging
@@ -122,18 +124,19 @@ Duplicate status messages, where nothing has changed, will be suppressed for up 
 ```bash
 $ seq 1 10 \
     | dispatch --concurrency 4 -- bash -c 'echo {{.value}} ; sleep 4'
-Dec 22 08:12:07.262 INF Success command="{command:[bash -c echo 2 ; sleep 4] input:}" "combined output"="2\n"
-Dec 22 08:12:07.262 INF Success command="{command:[bash -c echo 3 ; sleep 4] input:}" "combined output"="3\n"
-Dec 22 08:12:07.262 INF Success command="{command:[bash -c echo 1 ; sleep 4] input:}" "combined output"="1\n"
-Dec 22 08:12:07.262 INF Success command="{command:[bash -c echo 4 ; sleep 4] input:}" "combined output"="4\n"
-Dec 22 08:12:10.002 INF Queued: 2; In progress: 4; Succeeded: 4; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 6 seconds
-Dec 22 08:12:11.267 INF Success command="{command:[bash -c echo 8 ; sleep 4] input:}" "combined output"="8\n"
-Dec 22 08:12:11.267 INF Success command="{command:[bash -c echo 6 ; sleep 4] input:}" "combined output"="6\n"
-Dec 22 08:12:11.267 INF Success command="{command:[bash -c echo 7 ; sleep 4] input:}" "combined output"="7\n"
-Dec 22 08:12:11.267 INF Success command="{command:[bash -c echo 5 ; sleep 4] input:}" "combined output"="5\n"
-Dec 22 08:12:15.272 INF Success command="{command:[bash -c echo 9 ; sleep 4] input:}" "combined output"="9\n"
-Dec 22 08:12:15.272 INF Success command="{command:[bash -c echo 10 ; sleep 4] input:}" "combined output"="10\n"
-Dec 22 08:12:15.272 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Elapsed time: 12s
+Jan 18 11:07:20.001 INF Queued: 6; In progress: 4; Succeeded: 0; Failed: 0; Aborted: 0; Total: 10; Elapsed time: 2s
+Jan 18 11:07:22.214 INF Success elapsed="4 seconds" command="{command:[bash -c echo 1 ; sleep 4] input:}" "output ID"=6df52a0cdc6eca57435d.zstd
+Jan 18 11:07:22.215 INF Success elapsed="4 seconds" command="{command:[bash -c echo 2 ; sleep 4] input:}" "output ID"=4b36322bcedff1c28a1f.zstd
+Jan 18 11:07:22.215 INF Success elapsed="4 seconds" command="{command:[bash -c echo 4 ; sleep 4] input:}" "output ID"=f0a6d3d22d07a6b90dd3.zstd
+Jan 18 11:07:22.215 INF Success elapsed="4 seconds" command="{command:[bash -c echo 3 ; sleep 4] input:}" "output ID"=2530f16eae5544001d06.zstd
+Jan 18 11:07:26.222 INF Success elapsed="4 seconds" command="{command:[bash -c echo 5 ; sleep 4] input:}" "output ID"=cb4190288a646098d531.zstd
+Jan 18 11:07:26.222 INF Success elapsed="4 seconds" command="{command:[bash -c echo 6 ; sleep 4] input:}" "output ID"=408273f1513e41602871.zstd
+Jan 18 11:07:26.222 INF Success elapsed="4 seconds" command="{command:[bash -c echo 7 ; sleep 4] input:}" "output ID"=df799aad2e32c063d4a6.zstd
+Jan 18 11:07:26.222 INF Success elapsed="4 seconds" command="{command:[bash -c echo 8 ; sleep 4] input:}" "output ID"=9ce5ac37743d948a9860.zstd
+Jan 18 11:07:30.003 INF Queued: 0; In progress: 2; Succeeded: 8; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 229 milliseconds
+Jan 18 11:07:30.228 INF Success elapsed="4 seconds" command="{command:[bash -c echo 10 ; sleep 4] input:}" "output ID"=242a72a9cb9c900a778c.zstd
+Jan 18 11:07:30.228 INF Success elapsed="4 seconds" command="{command:[bash -c echo 9 ; sleep 4] input:}" "output ID"=6d306a99edd97b9a2901.zstd
+Jan 18 11:07:30.228 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 0 milliseconds
 ```
 
 #### Skipping previously-run jobs
@@ -142,18 +145,18 @@ If a job has already been attempted, and should not be re-attempted, use `--skip
 
 ```bash
 $ seq 2 | dispatch --skip-successes
-Dec 22 08:12:48.198 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:12:48.301 INF Success command="{command:[echo value is 1] input:}" "combined output"="value is 1\n"
-Dec 22 08:12:48.301 INF Success command="{command:[echo value is 2] input:}" "combined output"="value is 2\n"
-Dec 22 08:12:48.301 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Elapsed time: 0s
+Jan 18 11:07:55.960 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:07:55.961 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:07:55.962 INF Success elapsed="1 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:07:55.962 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 
 
 $ seq 5 | dispatch --skip-successes
-Dec 22 08:12:53.395 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:12:53.498 INF Success command="{command:[echo value is 3] input:}" "combined output"="value is 3\n"
-Dec 22 08:12:53.498 INF Success command="{command:[echo value is 4] input:}" "combined output"="value is 4\n"
-Dec 22 08:12:53.498 INF Success command="{command:[echo value is 5] input:}" "combined output"="value is 5\n"
-Dec 22 08:12:53.499 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3 (+2 skipped); Elapsed time: 0s
+Jan 18 11:08:03.514 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:08:03.517 INF Success elapsed="3 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:08:03.520 INF Success elapsed="2 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:08:03.523 INF Success elapsed="3 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:08:03.523 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3 (+2 skipped); Estimated time remaining: 0 milliseconds
 ```
 
 Notice the `skipped` value in the stats line.
@@ -167,22 +170,21 @@ Below, 2 jobs are run, then 3 more 10 seconds later. With a debounce of 10s, thi
 
 ```bash
 $ seq 2 | dispatch --skip-successes ; sleep 10; seq 5 | dispatch --skip-successes ; seq 5 | dispatch --skip-successes --debounce-successes 10s
-Dec 22 08:15:19.995 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:15:20.000 INF Queued: 2; In progress: 0; Succeeded: 0; Failed: 0; Aborted: 0; Total: 2; Elapsed time: 0s
-Dec 22 08:15:20.099 INF Success command="{command:[echo value is 2] input:}" "combined output"="value is 2\n"
-Dec 22 08:15:20.099 INF Success command="{command:[echo value is 1] input:}" "combined output"="value is 1\n"
-Dec 22 08:15:20.099 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Elapsed time: 0s
+Jan 18 11:09:19.781 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:09:19.783 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:09:19.783 INF Success elapsed="1 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:09:19.783 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 
-Dec 22 08:15:30.113 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:15:30.216 INF Success command="{command:[echo value is 3] input:}" "combined output"="value is 3\n"
-Dec 22 08:15:30.216 INF Success command="{command:[echo value is 4] input:}" "combined output"="value is 4\n"
-Dec 22 08:15:30.216 INF Success command="{command:[echo value is 5] input:}" "combined output"="value is 5\n"
-Dec 22 08:15:30.217 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3 (+2 skipped); Elapsed time: 0s
+Jan 18 11:09:29.793 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:09:29.794 INF Success elapsed="1 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:09:29.794 INF Success elapsed="0 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:09:29.796 INF Success elapsed="1 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:09:29.796 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3 (+2 skipped); Estimated time remaining: 0 milliseconds
 
-Dec 22 08:15:30.226 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:15:30.329 INF Success command="{command:[echo value is 1] input:}" "combined output"="value is 1\n"
-Dec 22 08:15:30.329 INF Success command="{command:[echo value is 2] input:}" "combined output"="value is 2\n"
-Dec 22 08:15:30.330 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2 (+3 skipped); Elapsed time: 0s
+Jan 18 11:09:29.798 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:09:29.799 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:09:29.800 INF Success elapsed="0 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:09:29.800 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2 (+3 skipped); Estimated time remaining: 0 milliseconds
 
 ```
 
@@ -195,26 +197,26 @@ Where jobs have never been run before, the order provided in STDIN is respected.
 
 ```bash
 $ seq 5 | dispatch --concurrency=5 ; seq 10 | dispatch --defer-reruns --concurrency=5
-Dec 22 08:42:30.726 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:42:30.727 INF Success command="{command:[echo value is 2] input:}" "combined output"="value is 2\n"
-Dec 22 08:42:30.727 INF Success command="{command:[echo value is 1] input:}" "combined output"="value is 1\n"
-Dec 22 08:42:30.727 INF Success command="{command:[echo value is 3] input:}" "combined output"="value is 3\n"
-Dec 22 08:42:30.727 INF Success command="{command:[echo value is 5] input:}" "combined output"="value is 5\n"
-Dec 22 08:42:30.727 INF Success command="{command:[echo value is 4] input:}" "combined output"="value is 4\n"
-Dec 22 08:42:30.728 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Elapsed time: 0s
+Jan 18 11:08:55.177 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:08:55.178 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:08:55.179 INF Success elapsed="2 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:08:55.179 INF Success elapsed="2 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:08:55.179 INF Success elapsed="2 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:08:55.179 INF Success elapsed="2 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:08:55.179 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Estimated time remaining: 0 milliseconds
 
-Dec 22 08:42:30.730 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
-Dec 22 08:42:30.834 INF Success command="{command:[echo value is 9] input:}" "combined output"="value is 9\n"
-Dec 22 08:42:30.834 INF Success command="{command:[echo value is 6] input:}" "combined output"="value is 6\n"
-Dec 22 08:42:30.834 INF Success command="{command:[echo value is 10] input:}" "combined output"="value is 10\n"
-Dec 22 08:42:30.834 INF Success command="{command:[echo value is 7] input:}" "combined output"="value is 7\n"
-Dec 22 08:42:30.834 INF Success command="{command:[echo value is 8] input:}" "combined output"="value is 8\n"
-Dec 22 08:42:30.836 INF Success command="{command:[echo value is 1] input:}" "combined output"="value is 1\n"
-Dec 22 08:42:30.836 INF Success command="{command:[echo value is 4] input:}" "combined output"="value is 4\n"
-Dec 22 08:42:30.836 INF Success command="{command:[echo value is 3] input:}" "combined output"="value is 3\n"
-Dec 22 08:42:30.836 INF Success command="{command:[echo value is 2] input:}" "combined output"="value is 2\n"
-Dec 22 08:42:30.836 INF Success command="{command:[echo value is 5] input:}" "combined output"="value is 5\n"
-Dec 22 08:42:30.836 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Elapsed time: 0s
+Jan 18 11:08:55.182 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:08:55.288 INF Success elapsed="5 milliseconds" command="{command:[echo value is 9] input:}" "output ID"=baaf0a889c28102b4bab.zstd
+Jan 18 11:08:55.288 INF Success elapsed="5 milliseconds" command="{command:[echo value is 6] input:}" "output ID"=3dbd18cb1f87cd44dd8d.zstd
+Jan 18 11:08:55.288 INF Success elapsed="5 milliseconds" command="{command:[echo value is 7] input:}" "output ID"=6f97f0389902ee7d6f79.zstd
+Jan 18 11:08:55.288 INF Success elapsed="5 milliseconds" command="{command:[echo value is 10] input:}" "output ID"=7ffd061c809b4388d48e.zstd
+Jan 18 11:08:55.289 INF Success elapsed="6 milliseconds" command="{command:[echo value is 8] input:}" "output ID"=92d3f33311a0049f63e0.zstd
+Jan 18 11:08:55.294 INF Success elapsed="5 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:08:55.294 INF Success elapsed="6 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:08:55.296 INF Success elapsed="7 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:08:55.296 INF Success elapsed="7 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:08:55.296 INF Success elapsed="8 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:08:55.296 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 0 milliseconds
 
 ```
 
@@ -228,11 +230,11 @@ If you want a less noisy output, you can suppress success and/or failure message
 the filesystem as normal:
 
 ```bash
-$ seq 1 254 | dispatch --hide-failures --concurrency 100 --debounce 10s --timeout 10s -- nc -vz 192.168.4.{{.value}} 443
-Dec 22 08:47:59.126 INF Success command="{command:[nc -vz 192.168.4.53 443] input:}" "combined output"="Ncat: Version 7.92 ( https://nmap.org/ncat )\nNcat: Connected to 192.168.4.53:443.\nNcat: 0 bytes sent, 0 bytes received in 0.06 seconds.\n"
-Dec 22 08:48:00.000 INF Queued: 144; In progress: 100; Succeeded: 1; Failed: 9; Aborted: 0; Total: 254; Estimated time remaining: 88 seconds
-Dec 22 08:48:05.378 INF Success command="{command:[nc -vz 192.168.4.222 443] input:}" "combined output"="Ncat: Version 7.92 ( https://nmap.org/ncat )\nNcat: Connected to 192.168.4.222:443.\nNcat: 0 bytes sent, 0 bytes received in 0.09 seconds.\n"
-Dec 22 08:48:09.429 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 252; Aborted: 0; Total: 254; Estimated time remaining: 3 seconds
+$ seq 1 254 | dispatch --hide-failures --concurrency 100 --timeout 10s -- nc -vz 192.168.4.{{.value}} 443
+Jan 18 11:10:28.215 INF Success elapsed="41 milliseconds" command="{command:[nc -vz 192.168.4.53 443] input:}" "output ID"=2765d1e6ba31d75fb28e.zstd
+Jan 18 11:10:30.000 INF Queued: 138; In progress: 100; Succeeded: 1; Failed: 15; Aborted: 0; Total: 254; Estimated time remaining: 1324 milliseconds
+Jan 18 11:10:34.277 INF Success elapsed="13 milliseconds" command="{command:[nc -vz 192.168.4.222 443] input:}" "output ID"=1e522d01bc6e471afad2.zstd
+Jan 18 11:10:37.528 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 252; Aborted: 0; Total: 254; Estimated time remaining: 0 milliseconds
 ```
 
 ### Rate limiting
@@ -240,15 +242,29 @@ Dec 22 08:48:09.429 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 252; Ab
 Sometimes, despite wanting to run jobs concurrently, you want to place a limit on the maximum rate jobs can be started at. For example, you might want to run 4 jobs at a time, but wait 2 seconds between them:
 
 ```bash
-dispatch --rate-limit 2s --concurrency 4
+$ seq 1 5 | dispatch --rate-limit 2s --concurrency 4
+Jan 18 11:11:10.853 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:11:10.854 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:11:12.857 INF Success elapsed="3 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:11:14.860 INF Success elapsed="4 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:11:16.857 INF Success elapsed="3 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:11:18.859 INF Success elapsed="4 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:11:18.859 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Estimated time remaining: 0 milliseconds
 ```
 
 If bursting is acceptable, `--rate-limit-bucket-size` allows this.
 
-If you want to issue some API commands, ensuring no more than 1 is started per second, with a burst of 3 (but allowing 10 to run concurrently):
+For example, if you want to issue some API commands, ensuring no more than 1 is started per second, with a burst of 3 (but allowing 10 to run concurrently):
 
 ```bash
-dispatch --rate-limit 1s --rate-limit-bucket-size 3
+$ seq 1 5 | dispatch --rate-limit 1s --concurrency 4 --rate-limit-bucket-size 3
+Jan 18 11:11:22.642 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:11:22.645 INF Success elapsed="2 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:11:22.645 INF Success elapsed="2 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:11:22.645 INF Success elapsed="2 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:11:23.645 INF Success elapsed="2 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:11:24.645 INF Success elapsed="2 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:11:24.646 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Estimated time remaining: 0 milliseconds
 ```
 
 ### Dry-run
@@ -257,17 +273,16 @@ Want to ensure the right command will be run with the correct inputs? `--dry-run
 An implicit 1 second sleep will be substituted for the actual execution of each command:
 
 ```bash
-$ seq 8 | dispatch --dry-run --debounce 5s --concurrency 1 --input y -- rm -f foo.{{.value}}
-Dec 22 08:49:02.035 INF Success command="{command:[rm -f foo.1] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:03.036 INF Success command="{command:[rm -f foo.2] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:04.037 INF Success command="{command:[rm -f foo.3] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:05.038 INF Success command="{command:[rm -f foo.4] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:06.039 INF Success command="{command:[rm -f foo.5] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:07.040 INF Success command="{command:[rm -f foo.6] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:08.041 INF Success command="{command:[rm -f foo.7] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:09.042 INF Success command="{command:[rm -f foo.8] input:y}" "combined output"="(dry run)"
-Dec 22 08:49:09.042 INF Queued: 0; In progress: 0; Succeeded: 8; Failed: 0; Aborted: 0; Total: 8; Elapsed time: 8s
-
+$ seq 8 | dispatch --dry-run --debounce-successes 5s --concurrency 1 --input y -- rm -f foo.{{.value}}
+Jan 18 11:12:01.720 INF Success elapsed="1001 milliseconds" command="{command:[rm -f foo.1] input:y}" "output ID"=ab8b937c790098be3e55.zstd
+Jan 18 11:12:02.721 INF Success elapsed="1001 milliseconds" command="{command:[rm -f foo.2] input:y}" "output ID"=d2643bb44be06524dbd7.zstd
+Jan 18 11:12:03.725 INF Success elapsed="1004 milliseconds" command="{command:[rm -f foo.3] input:y}" "output ID"=5b49f64411d226dc7bb4.zstd
+Jan 18 11:12:04.728 INF Success elapsed="1002 milliseconds" command="{command:[rm -f foo.4] input:y}" "output ID"=1ea25bc93b7b65a186fd.zstd
+Jan 18 11:12:05.730 INF Success elapsed="1002 milliseconds" command="{command:[rm -f foo.5] input:y}" "output ID"=36838f3c883e7673f880.zstd
+Jan 18 11:12:06.732 INF Success elapsed="1002 milliseconds" command="{command:[rm -f foo.6] input:y}" "output ID"=31961c03ba1beddf9958.zstd
+Jan 18 11:12:07.733 INF Success elapsed="1001 milliseconds" command="{command:[rm -f foo.7] input:y}" "output ID"=d44dbd954201e40a421c.zstd
+Jan 18 11:12:08.734 INF Success elapsed="1001 milliseconds" command="{command:[rm -f foo.8] input:y}" "output ID"=2a5955872922219720dd.zstd
+Jan 18 11:12:08.734 INF Queued: 0; In progress: 0; Succeeded: 8; Failed: 0; Aborted: 0; Total: 8; Estimated time remaining: 0 milliseconds
 ```
 
 ### Shuffle / randomise
@@ -281,6 +296,32 @@ any jobs are started.
 run only after new jobs, but the new jobs will be run in a random order. (The rerun jobs are not randomised,
 as they are selected based on the time the job was last attempted.)
 
+```bash
+$ seq 5 | dispatch --shuffle --defer-reruns
+Jan 18 11:58:21.142 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:58:21.247 INF Success elapsed="3 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:58:21.249 INF Success elapsed="2 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:58:21.252 INF Success elapsed="3 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:58:21.252 INF Success elapsed="1 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:58:21.253 INF Success elapsed="1 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:58:21.253 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Estimated time remaining: 0 milliseconds
+
+$ seq 10 | dispatch --shuffle --defer-reruns
+Jan 18 11:58:23.879 INF no command was provided, so just echoing the input commandline="[echo value is {{.value}}]"
+Jan 18 11:58:23.984 INF Success elapsed="4 milliseconds" command="{command:[echo value is 7] input:}" "output ID"=6f97f0389902ee7d6f79.zstd
+Jan 18 11:58:23.986 INF Success elapsed="2 milliseconds" command="{command:[echo value is 10] input:}" "output ID"=7ffd061c809b4388d48e.zstd
+Jan 18 11:58:23.990 INF Success elapsed="4 milliseconds" command="{command:[echo value is 8] input:}" "output ID"=92d3f33311a0049f63e0.zstd
+Jan 18 11:58:23.993 INF Success elapsed="3 milliseconds" command="{command:[echo value is 6] input:}" "output ID"=3dbd18cb1f87cd44dd8d.zstd
+Jan 18 11:58:23.996 INF Success elapsed="3 milliseconds" command="{command:[echo value is 9] input:}" "output ID"=baaf0a889c28102b4bab.zstd
+Jan 18 11:58:23.998 INF Success elapsed="2 milliseconds" command="{command:[echo value is 3] input:}" "output ID"=99bdbf20bfc04b6eb4e1.zstd
+Jan 18 11:58:24.000 INF Success elapsed="1 milliseconds" command="{command:[echo value is 5] input:}" "output ID"=f8927c64f1d75b4bcae8.zstd
+Jan 18 11:58:24.001 INF Success elapsed="1 milliseconds" command="{command:[echo value is 1] input:}" "output ID"=9bfdb2668ac9919e0db1.zstd
+Jan 18 11:58:24.002 INF Success elapsed="1 milliseconds" command="{command:[echo value is 4] input:}" "output ID"=63bab6284a47dd147568.zstd
+Jan 18 11:58:24.004 INF Success elapsed="2 milliseconds" command="{command:[echo value is 2] input:}" "output ID"=a2cc2f4538d74fba8b2e.zstd
+Jan 18 11:58:24.004 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 0 milliseconds
+
+```
+
 ### Job cancellations and timeouts
 
 Defining a timeout will cause jobs to be terminated if it is reached:
@@ -288,16 +329,16 @@ Defining a timeout will cause jobs to be terminated if it is reached:
 ```bash
 $ seq 1 7 \
     | dispatch --concurrency 2 --timeout 5s -- bash -c 'echo {{.value}} ; sleep {{.value}}'
-Dec 22 08:50:10.000 INF Queued: 5; In progress: 2; Succeeded: 0; Failed: 0; Aborted: 0; Total: 7; Elapsed time: 1s
-Dec 22 08:50:10.059 INF Success command="{command:[bash -c echo 1 ; sleep 1] input:}" "combined output"="1\n"
-Dec 22 08:50:11.059 INF Success command="{command:[bash -c echo 2 ; sleep 2] input:}" "combined output"="2\n"
-Dec 22 08:50:13.064 INF Success command="{command:[bash -c echo 3 ; sleep 3] input:}" "combined output"="3\n"
-Dec 22 08:50:15.064 INF Success command="{command:[bash -c echo 4 ; sleep 4] input:}" "combined output"="4\n"
-Dec 22 08:50:18.067 WRN Failure command="{command:[bash -c echo 5 ; sleep 5] input:}" "combined output"="5\n" error="signal: killed"
-Dec 22 08:50:20.001 INF Queued: 0; In progress: 2; Succeeded: 4; Failed: 1; Aborted: 0; Total: 7; Estimated time remaining: 3 seconds
-Dec 22 08:50:20.065 WRN Failure command="{command:[bash -c echo 6 ; sleep 6] input:}" "combined output"="6\n" error="signal: killed"
-Dec 22 08:50:23.070 WRN Failure command="{command:[bash -c echo 7 ; sleep 7] input:}" "combined output"="7\n" error="signal: killed"
-Dec 22 08:50:23.070 INF Queued: 0; In progress: 0; Succeeded: 4; Failed: 3; Aborted: 0; Total: 7; Elapsed time: 14s
+Jan 18 11:04:15.373 INF Success elapsed="1006 milliseconds" command="{command:[bash -c echo 1 ; sleep 1] input:}" "output ID"=d7fd3b289a22aff57047.zstd
+Jan 18 11:04:16.374 INF Success elapsed="2 seconds" command="{command:[bash -c echo 2 ; sleep 2] input:}" "output ID"=bc0d5aced16de4e0816e.zstd
+Jan 18 11:04:18.380 INF Success elapsed="3 seconds" command="{command:[bash -c echo 3 ; sleep 3] input:}" "output ID"=60284b3ef8cdc80af521.zstd
+Jan 18 11:04:20.000 INF Queued: 2; In progress: 2; Succeeded: 3; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 5 seconds
+Jan 18 11:04:20.380 INF Success elapsed="4 seconds" command="{command:[bash -c echo 4 ; sleep 4] input:}" "output ID"=f0a6d3d22d07a6b90dd3.zstd
+Jan 18 11:04:23.384 WRN Failure elapsed="5 seconds" command="{command:[bash -c echo 5 ; sleep 5] input:}" "output ID"=1d1e837e38a186ee4220.zstd error="signal: killed"
+Jan 18 11:04:25.383 WRN Failure elapsed="5 seconds" command="{command:[bash -c echo 6 ; sleep 6] input:}" "output ID"=4bd1d8a81ac68fdfdf23.zstd error="signal: killed"
+Jan 18 11:04:28.387 WRN Failure elapsed="5 seconds" command="{command:[bash -c echo 7 ; sleep 7] input:}" "output ID"=b883233d5c600d37eaec.zstd error="signal: killed"
+Jan 18 11:04:28.387 INF Queued: 0; In progress: 0; Succeeded: 4; Failed: 3; Aborted: 0; Total: 7; Estimated time remaining: 0 milliseconds
+
 ```
 
 Cancelling (e.g. with CTRL-C) while running will stop any further jobs from being started, and will exit
@@ -309,23 +350,23 @@ their process groups.
 
 ```bash
 $ seq 80 | dispatch --concurrency 5 --defer-reruns  -- bash -c 'trap noop SIGTERM ; sleep {{.value}}'
-Dec 22 08:50:40.001 INF Queued: 75; In progress: 5; Succeeded: 0; Failed: 0; Aborted: 0; Total: 80; Elapsed time: 1s
-Dec 22 08:50:40.498 INF Success command="{command:[bash -c trap noop SIGTERM ; sleep 1] input:}" "combined output"=""
-^CDec 22 08:50:40.934 WRN received cancellation signal. Waiting for current jobs to finish before exiting. Hit CTRL-C again to exit sooner
-Dec 22 08:50:40.934 INF Queued: 0; In progress: 5; Succeeded: 1; Failed: 0; Aborted: 0; Total: 6; Estimated time remaining: 1 seconds
-Dec 22 08:50:41.498 INF Success command="{command:[bash -c trap noop SIGTERM ; sleep 2] input:}" "combined output"=""
-Dec 22 08:50:42.000 INF Queued: 0; In progress: 4; Succeeded: 2; Failed: 0; Aborted: 0; Total: 6; Elapsed time: 3s
-^CDec 22 08:50:42.222 WRN second CTRL-C received. Sending SIGTERM to running jobs. Hit CTRL-C again to use SIGKILL instead
-Dec 22 08:50:42.499 INF Success command="{command:[bash -c trap noop SIGTERM ; sleep 3] input:}" "combined output"="bash: line 1: noop: command not found\n"
-^CDec 22 08:50:42.948 WRN third CTRL-C received. Sending SIGKILL to running jobs. Hit CTRL-C again to kill all subprocesses too
-Dec 22 08:50:43.001 INF Queued: 0; In progress: 3; Succeeded: 3; Failed: 0; Aborted: 0; Total: 6; Elapsed time: 4s
-Dec 22 08:50:43.497 WRN Failure command="{command:[bash -c trap noop SIGTERM ; sleep 4] input:}" "combined output"="" error="signal: killed"
-^CDec 22 08:50:43.712 WRN fourth CTRL-C received. Sending SIGKILL to running jobs and their subprocesses
-Dec 22 08:50:43.712 WRN Failure command="{command:[bash -c trap noop SIGTERM ; sleep 6] input:}" "combined output"="" error="signal: killed"
-Dec 22 08:50:43.712 WRN Failure command="{command:[bash -c trap noop SIGTERM ; sleep 5] input:}" "combined output"="" error="signal: killed"
-Dec 22 08:50:43.713 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 3; Aborted: 0; Total: 6; Estimated time remaining: 1 seconds
-Dec 22 08:50:43.713 ERR user-initiated shutdown
-
+Jan 18 11:59:26.046 INF Success elapsed="1010 milliseconds" command="{command:[bash -c trap noop SIGTERM ; sleep 1] input:}" "output ID"=a7c02935cb86ae82293b.zstd
+Jan 18 11:59:27.046 INF Success elapsed="2 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 2] input:}" "output ID"=e5d121137c2996e5ed41.zstd
+^CJan 18 11:59:27.766 INF Queued: 0; In progress: 5; Succeeded: 2; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 2 seconds
+Jan 18 11:59:27.766 WRN received cancellation signal. Waiting for current jobs to finish before exiting. Hit CTRL-C again to exit sooner
+Jan 18 11:59:28.000 INF Queued: 0; In progress: 5; Succeeded: 2; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 1776 milliseconds
+Jan 18 11:59:28.046 INF Success elapsed="3 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 3] input:}" "output ID"=ce8670d72f9c21552622.zstd
+Jan 18 11:59:29.001 INF Queued: 0; In progress: 4; Succeeded: 3; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 1775 milliseconds
+^CJan 18 11:59:29.016 WRN second CTRL-C received. Sending SIGTERM to running jobs. Hit CTRL-C again to use SIGKILL instead
+Jan 18 11:59:29.048 INF Success elapsed="4 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 4] input:}" "output ID"=7a01a3a137b433eb128a.zstd
+Jan 18 11:59:30.001 INF Queued: 0; In progress: 3; Succeeded: 4; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 1777 milliseconds
+Jan 18 11:59:30.047 INF Success elapsed="5 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 5] input:}" "output ID"=f4a21cd7471f7456fde9.zstd
+^CJan 18 11:59:30.386 WRN third CTRL-C received. Sending SIGKILL to running jobs. Hit CTRL-C again to kill all subprocesses too
+Jan 18 11:59:31.001 INF Queued: 0; In progress: 2; Succeeded: 5; Failed: 0; Aborted: 0; Total: 7; Estimated time remaining: 1776 milliseconds
+Jan 18 11:59:32.051 WRN Failure elapsed="6 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 6] input:}" "output ID"=eabbe4398cf197bdbefb.zstd error="signal: killed"
+Jan 18 11:59:33.001 INF Queued: 0; In progress: 1; Succeeded: 5; Failed: 1; Aborted: 0; Total: 7; Estimated time remaining: -58 milliseconds
+Jan 18 11:59:34.050 WRN Failure elapsed="7 seconds" command="{command:[bash -c trap noop SIGTERM ; sleep 7] input:}" "output ID"=86a6bb7ada19415fae7b.zstd error="signal: killed"
+Jan 18 11:59:34.050 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 2; Aborted: 0; Total: 7; Estimated time remaining: 0 milliseconds
 ```
 
 If you want to stop processing if a job fails, use `--abort-on-error`:
@@ -333,16 +374,16 @@ If you want to stop processing if a job fails, use `--abort-on-error`:
 ```bash
 $ seq 1 10 \
     | dispatch --abort-on-error --concurrency 2 --timeout 5s -- bash -c 'echo {{.value}} ; sleep {{.value}}'
-Dec 22 08:51:40.001 INF Queued: 8; In progress: 2; Succeeded: 0; Failed: 0; Aborted: 0; Total: 10; Elapsed time: 1s
-Dec 22 08:51:40.253 INF Success command="{command:[bash -c echo 1 ; sleep 1] input:}" "combined output"="1\n"
-Dec 22 08:51:41.253 INF Success command="{command:[bash -c echo 2 ; sleep 2] input:}" "combined output"="2\n"
-Dec 22 08:51:43.258 INF Success command="{command:[bash -c echo 3 ; sleep 3] input:}" "combined output"="3\n"
-Dec 22 08:51:45.258 INF Success command="{command:[bash -c echo 4 ; sleep 4] input:}" "combined output"="4\n"
-Dec 22 08:51:48.261 WRN Failure command="{command:[bash -c echo 5 ; sleep 5] input:}" "combined output"="5\n" error="signal: killed"
-Dec 22 08:51:49.000 INF Queued: 4; In progress: 1; Succeeded: 4; Failed: 1; Aborted: 0; Total: 10; Estimated time remaining: 15 seconds
-Dec 22 08:51:50.259 WRN Failure command="{command:[bash -c echo 6 ; sleep 6] input:}" "combined output"="6\n" error="signal: killed"
-Dec 22 08:51:50.260 INF Queued: 4; In progress: 0; Succeeded: 4; Failed: 2; Aborted: 0; Total: 10; Estimated time remaining: 15 seconds
-Dec 22 08:51:50.260 ERR nonzero exit code
+Jan 18 12:00:15.993 INF Success elapsed="1003 milliseconds" command="{command:[bash -c echo 1 ; sleep 1] input:}" "output ID"=d7fd3b289a22aff57047.zstd
+Jan 18 12:00:16.993 INF Success elapsed="2 seconds" command="{command:[bash -c echo 2 ; sleep 2] input:}" "output ID"=bc0d5aced16de4e0816e.zstd
+Jan 18 12:00:18.998 INF Success elapsed="3 seconds" command="{command:[bash -c echo 3 ; sleep 3] input:}" "output ID"=60284b3ef8cdc80af521.zstd
+Jan 18 12:00:20.001 INF Queued: 5; In progress: 2; Succeeded: 3; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 8 seconds
+Jan 18 12:00:20.997 INF Success elapsed="4 seconds" command="{command:[bash -c echo 4 ; sleep 4] input:}" "output ID"=f0a6d3d22d07a6b90dd3.zstd
+Jan 18 12:00:24.002 WRN Failure elapsed="5 seconds" command="{command:[bash -c echo 5 ; sleep 5] input:}" "output ID"=1d1e837e38a186ee4220.zstd error="signal: killed"
+Jan 18 12:00:25.000 INF Queued: 4; In progress: 1; Succeeded: 4; Failed: 1; Aborted: 0; Total: 10; Estimated time remaining: 10 seconds
+Jan 18 12:00:25.999 WRN Failure elapsed="5 seconds" command="{command:[bash -c echo 6 ; sleep 6] input:}" "output ID"=4bd1d8a81ac68fdfdf23.zstd error="signal: killed"
+Jan 18 12:00:25.999 INF Queued: 4; In progress: 0; Succeeded: 4; Failed: 2; Aborted: 0; Total: 10; Estimated time remaining: 11 seconds
+Jan 18 12:00:25.999 ERR nonzero exit code
 ```
 
 ### Simulating STDIN
@@ -352,9 +393,9 @@ Note that the input text can be the same for each job, or can be parameterised u
 
 ```bash
 $ echo -e 'animal,name,emotion\ncat,Scarface Claw,hungry' \
-    | dispatch --input '{{.emotion}}' --csv -- /bin/bash -c 'read emotion; echo the {{.animal}} is called {{.name}} and is $emotion'
-Dec 22 08:52:17.013 INF Success command="{command:[/bin/bash -c read emotion; echo the cat is called Scarface Claw and is $emotion] input:hungry}" "combined output"="the cat is called Scarface Claw and is hungry\n"
-Dec 22 08:52:17.014 INF Queued: 0; In progress: 0; Succeeded: 1; Failed: 0; Aborted: 0; Total: 1; Elapsed time: 0s
+    | dispatch --show-stdout --hide-successes --input '{{.emotion}}' --csv -- /bin/bash -c 'read emotion; echo the {{.animal}} is called {{.name}} and is $emotion'
+the cat is called Scarface Claw and is hungry
+Jan 18 12:02:08.154 INF Queued: 0; In progress: 0; Succeeded: 1; Failed: 0; Aborted: 0; Total: 1; Estimated time remaining: 0 milliseconds
 
 ```
 
