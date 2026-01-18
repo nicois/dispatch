@@ -96,7 +96,7 @@ func Run(ctx context.Context, stats *Stats, interruptChannel <-chan os.Signal, o
 			logger.Warn("received cancellation signal. Waiting for current jobs to finish before exiting. Hit CTRL-C again to exit sooner")
 			cancel(ErrUserCancelled)
 		case <-ctx.Done():
-			logger.Info("ctx cancelled, leaving without cancelling")
+			logger.Debug("ctx cancelled, leaving without cancelling")
 			return
 		}
 
@@ -230,8 +230,9 @@ func PrepareAndRun(ctx context.Context, reader io.Reader, opts Opts, commandLine
 				mostRecentlyLastRun = time.Time{}
 			}
 			if opts.Shuffle {
-			} else {
 				index = rand.Int63()
+			} else {
+				index = index + 1
 			}
 			select {
 			case <-ctx.Done():
@@ -275,7 +276,6 @@ func sorter(ctx context.Context, opts Opts, presortedCommands <-chan UnsortedCom
 
 	// insert new items into the btree
 	go func() {
-		var minitime time.Time
 		defer close(youHaveMail)
 		for {
 			// if context is cancelled, exit
@@ -291,11 +291,6 @@ func sorter(ctx context.Context, opts Opts, presortedCommands <-chan UnsortedCom
 				if !ok {
 					// channel is closed; nothing more is incoming
 					return
-				}
-				if uc.timestamp.IsZero() {
-					// similate a very old time, but not identical to other very old times
-					minitime = minitime.Add(time.Nanosecond)
-					uc.timestamp = minitime
 				}
 				// insert the command into the btree
 				mutex.Lock()
