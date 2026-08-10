@@ -9,7 +9,7 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/klauspost/compress v1.19.2
 	github.com/lmittmann/tint v1.2.0
-	github.com/nicois/bigset v0.0.0-20251220071913-937d42d5f24e
+	github.com/nicois/bigset v0.0.0-20260810105257-69309c69d017
 	golang.org/x/time v0.15.0
 )
 
@@ -29,8 +29,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.4 // indirect
-	github.com/aws/smithy-go v1.27.6 // indirect
-	github.com/mattn/go-sqlite3 v1.14.32 // indirect
-	github.com/nicois/fastdb v0.0.0-20250919114344-7a2afc19a22e // indirect
-	golang.org/x/sys v0.21.0 // indirect
+	github.com/aws/smithy-go v1.27.7 // indirect
+	github.com/mattn/go-sqlite3 v1.14.49 // indirect
+	github.com/nicois/fastdb v0.0.0-20260810104707-fafb80c16a51 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
