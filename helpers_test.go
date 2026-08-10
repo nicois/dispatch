@@ -33,7 +33,7 @@ func dispatchGoroutines() string {
 	buf := make([]byte, 1<<18)
 	n := runtime.Stack(buf, true)
 	var relevant []string
-	for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+	for stack := range strings.SplitSeq(string(buf[:n]), "\n\n") {
 		if strings.Contains(stack, "nicois/dispatch") {
 			relevant = append(relevant, stack)
 		}

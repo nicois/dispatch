@@ -338,7 +338,7 @@ func Worker(ctx context.Context, opts Opts, signaller <-chan os.Signal, cancel c
 		// hasInput, rather than a non-empty string, so that an explicitly
 		// empty --input still feeds newlines to a job which reads STDIN.
 		if command.hasInput {
-			cmd.Stdin = &Yes{Line: []byte(fmt.Sprintf("%v\n", command.input))}
+			cmd.Stdin = &Yes{Line: fmt.Appendf(nil, "%v\n", command.input)}
 		}
 		marker := Marker(command)
 

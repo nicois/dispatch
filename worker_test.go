@@ -23,11 +23,9 @@ func TestWorkerSignalEscalationIsRaceFree(t *testing.T) {
 	opts := baseOpts()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		Worker(ctx, opts, signaller, cancel, commands, testCache(t), stats, nil)
-	}()
+	})
 
 	// Keep the worker churning through short jobs while signals arrive, so the
 	// signal handler repeatedly observes cmd being replaced.

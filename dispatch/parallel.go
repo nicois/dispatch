@@ -77,7 +77,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	} else {
 		handlerOptions.Level = slog.LevelInfo
 	}
-	logger = slog.New(tint.NewHandler(stdout, &handlerOptions))
+	logger = slog.New(tint.NewTextHandler(stdout, &handlerOptions))
 	dispatch.SetLogger(logger)
 
 	// listen for signals

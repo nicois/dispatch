@@ -43,11 +43,9 @@ func Run(ctx context.Context, stats *Stats, interruptChannel <-chan os.Signal, o
 		logger.Warn("no statistics will be generated")
 	} else {
 		// Show the current status, every 10ish seconds
-		helpers.Add(1)
-		go func() {
-			defer helpers.Done()
+		helpers.Go(func() {
 			reportStatus(ctx, finished, stats)
-		}()
+		})
 	}
 
 	signallers := make([]chan os.Signal, 0, opts.Concurrency)
@@ -56,19 +54,15 @@ func Run(ctx context.Context, stats *Stats, interruptChannel <-chan os.Signal, o
 	for range opts.Concurrency {
 		signaller := make(chan os.Signal, 2)
 		signallers = append(signallers, signaller)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			Worker(ctx, opts, signaller, cancel, commands, cache, stats, limiter)
-		}()
+		})
 	}
 
 	// Provide user feedback when starting the exit process, but waiting for running jobs
-	helpers.Add(1)
-	go func() {
-		defer helpers.Done()
+	helpers.Go(func() {
 		escalateInterrupts(ctx, finished, interruptChannel, signallers, stats, cancel)
-	}()
+	})
 
 	wg.Wait()
 	// Release the helpers, then wait for them so no goroutine outlives Run.
@@ -272,10 +266,7 @@ func PrepareAndRunWithStats(ctx context.Context, reader io.Reader, opts Opts, co
 	var minimumDuration time.Duration
 	if opts.RateLimit != nil {
 		minimumDuration = time.Duration(*opts.RateLimit)
-		bucketSize := opts.RateLimitBucketSize
-		if bucketSize < 1 {
-			bucketSize = 1
-		}
+		bucketSize := max(opts.RateLimitBucketSize, 1)
 		limiter = rate.NewLimiter(rate.Every(minimumDuration), bucketSize)
 	}
 
