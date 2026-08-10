@@ -3,7 +3,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,7 +57,13 @@ func NewS3Cache(ctx context.Context, uri string) (Cache, error) {
 func (f *s3Cache) loadMtimes(ctx context.Context) error {
 	startTime := time.Now()
 	nextReportTime := startTime.Add(time.Second)
-	paginator := s3.NewListObjectsV2Paginator(f.client, &s3.ListObjectsV2Input{Bucket: &(f.bucket)})
+	// Scope the listing to the configured prefix, rather than scanning the
+	// whole bucket, which may hold unrelated objects.
+	input := &s3.ListObjectsV2Input{Bucket: &(f.bucket)}
+	if f.prefix != "" {
+		input.Prefix = &(f.prefix)
+	}
+	paginator := s3.NewListObjectsV2Paginator(f.client, input)
 	var counter int64
 	for paginator.HasMorePages() {
 		if time.Now().After(nextReportTime) {
@@ -107,8 +112,11 @@ func (f *s3Cache) SuccessModTime(ctx context.Context, marker string) (time.Time,
 
 func (f *s3Cache) fetchMtime(ctx context.Context, path string) (time.Time, error) {
 	mtime, err := f.mtimes.RetrieveIfExists(ctx, "default", MTime{Path: path})
-	if err != nil || mtime == nil {
-		return time.Time{}, errors.New("ntime not available as the path does not exist")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("could not look up %q: %w", path, err)
+	}
+	if mtime == nil {
+		return time.Time{}, ErrNotFound
 	}
 	return mtime.Mtime, nil
 }
@@ -148,12 +156,21 @@ func readCloserToBytes(rc io.ReadCloser) ([]byte, error) {
 	return data, nil
 }
 
+// GetS3ExpiryTime reports when the current AWS credentials expire, according to
+// the AWS_EXPIRY_TIME environment variable, or nil if that is unset. A value
+// which cannot be parsed is reported as a warning and treated as unset, since
+// the alternative is silently losing the shutdown safety margin.
 func GetS3ExpiryTime() *time.Time {
-	t, err := time.Parse(time.RFC3339, os.Getenv("AWS_EXPIRY_TIME"))
-	fmt.Println("e", err)
-	if err == nil {
-		return &t
+	raw := os.Getenv("AWS_EXPIRY_TIME")
+	if raw == "" {
+		return nil
 	}
-	fmt.Println("e2", err)
-	return nil
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		logger.Warn("ignoring AWS_EXPIRY_TIME as it is not a valid RFC3339 timestamp",
+			slog.String("AWS_EXPIRY_TIME", raw),
+			slog.Any("error", err))
+		return nil
+	}
+	return &t
 }

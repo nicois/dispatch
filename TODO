@@ -1,29 +1,38 @@
-* find a way to easily map the command (and input) to the output.
+* Find an easy method to connect the command (and the input) to the output.
+
 use cases:
-- view the output for a specific command/input
-- search all outputs for a certain type of command/input (eg: which failure outputs of command X include the string Y?)
+- Show the output of a given command and input.
+- Find a string in the outputs of a given command. For example: which failed outputs of command X
+  contain the string Y?
 
-
-complications:
-- can't store the command/input in a filename, unless it's OK to be lossy
-- not great to store in the same file as the output, as searching output may match on the command by accident
+problems:
+- A file name cannot hold the command and the input, because some characters are not permitted.
+- The output file is not a good location for the command, because a search of the output can find
+  the command by accident.
 
 options:
-- create a lossy symlink alongside the hash with the output.
-- put the command/input in the file, as the first line
-- create a sqlite database (or plain file) mapping command/input to hash
+- Make a symbolic link, beside the hash, with a shorter name.
+- Write the command and the input in the first line of the file.
+- Make an SQLite database, or a simple file, that connects the command and the input to the hash.
 
 current idea:
-- create a subdirectory named with the job hash, and a single file inside with a sanitised version
-  of the command+input. The MTIME of this file is used to determine when it last succeeded/failed
+- Make a subdirectory with the name of the job hash. Put one file in this subdirectory, with a safe
+  version of the command and the input. The MTIME of this file gives the time of the last run.
 
-* use sqlite to store (most of) the btree when defering retries, to avoid unbounded memory usage.
-can't use bigset as its structure is not designed for sorting. Make something similar which allows inserts and popping of the minimum value.
-Could retain a limited number of items in memory for optimisation purposes, but it shouldn't be necessary; the additional time taken to
-retrieve the next item to run will be negligible compared to the jobs' execution times. Additionally, the channel will usually have one job
-waiting for collection anyway, so there will only be any delay when there is a burst of new jobs being created
+* Use SQLite to hold most of the btree when dispatch defers the reruns. This prevents unlimited use of
+memory.
+Bigset is not applicable, because its structure cannot sort the data. Make a similar component that can
+add an item and remove the smallest item.
+The component can keep a small number of items in memory, but this is possibly not necessary. The time to
+find the next job is very short in comparison to the duration of a job. Also, the channel usually holds one
+job. Therefore there is a delay only when another program makes many new jobs quickly.
 
-* make zstd into an option.
-this requires modifying the marker checkers to ignore suffixes, so that .zstd can be present or absent, and the marker is still found.
-This will add some complications if people want to grep or otherwise process these marker files, so even though zstd is a little more
-painful to use in some situations, it may be better to simply always compress, to maintain uniformity
+* Make zstd optional.
+The marker functions must then ignore the suffix, and find the marker with or without `.zstd`.
+This makes it more difficult to search these files with grep or other tools. Therefore it is possibly
+better to always compress the output, and keep the behaviour the same for each file.
+Note: `dispatch.Decompress` is now available. It reads the output that `Compress` wrote.
+
+* Only unit tests cover the escalation of the signals (SIGTERM, SIGKILL, process group). These tests send
+the signals directly to a Worker. A test that starts the real program, and then sends more than one SIGINT,
+gives better evidence. But such a test is difficult to make reliable in CI.

@@ -1,1 +1,4 @@
-*
+# The compiled binary, which takes its name from this directory.
+/dispatch
+# GoReleaser output.
+/dist/

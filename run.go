@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -31,41 +32,21 @@ func Run(ctx context.Context, stats *Stats, interruptChannel <-chan os.Signal, o
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
+	// finished is closed once every worker has returned, releasing the helper
+	// goroutines below so that Run leaves nothing running behind it.
+	finished := make(chan struct{})
+
+	// helpers tracks the goroutines Run owns, so it can wait for them to stop.
+	helpers := &sync.WaitGroup{}
+
 	if stats == nil {
 		logger.Warn("no statistics will be generated")
 	} else {
 		// Show the current status, every 10ish seconds
+		helpers.Add(1)
 		go func() {
-			_ = SleepInLockstep(ctx, 10*time.Second)
-			ticker := time.NewTicker(10 * time.Second)
-			var lastShown time.Time
-		loop:
-			for {
-				select {
-				case <-ctx.Done():
-					break loop
-				default:
-				}
-				if stats.ClearDirty() || time.Since(lastShown) >= 10*time.Minute-time.Second {
-					logger.Info(stats.String())
-					lastShown = time.Now()
-				}
-				select {
-				case <-ctx.Done():
-					break loop
-				case <-ticker.C:
-				}
-			}
-			ticker.Stop()
-			_ = SleepInLockstep(context.Background(), time.Second)
-			ticker = time.NewTicker(time.Second)
-			for {
-				if stats.ClearDirty() || time.Since(lastShown) >= 10*time.Minute-time.Second {
-					logger.Info(stats.String())
-					lastShown = time.Now()
-				}
-				<-ticker.C
-			}
+			defer helpers.Done()
+			reportStatus(ctx, finished, stats)
 		}()
 	}
 
@@ -83,57 +64,185 @@ func Run(ctx context.Context, stats *Stats, interruptChannel <-chan os.Signal, o
 	}
 
 	// Provide user feedback when starting the exit process, but waiting for running jobs
+	helpers.Add(1)
 	go func() {
-		select {
-		case <-interruptChannel:
-			if stats != nil {
-				stats.Total.Add(-1 * stats.ZeroQueued())
-				stats.SetDirty()
-				if stats.ClearDirty() {
-					logger.Info(stats.String())
-				}
-			}
-			logger.Warn("received cancellation signal. Waiting for current jobs to finish before exiting. Hit CTRL-C again to exit sooner")
-			cancel(ErrUserCancelled)
-		case <-ctx.Done():
-			logger.Debug("ctx cancelled, leaving without cancelling")
-			return
-		}
-
-		<-interruptChannel
-		for _, signaller := range signallers {
-			select {
-			case signaller <- syscall.SIGTERM:
-			default:
-			}
-		}
-		logger.Warn("second CTRL-C received. Sending SIGTERM to running jobs. Hit CTRL-C again to use SIGKILL instead")
-
-		<-interruptChannel
-		for _, signaller := range signallers {
-			select {
-			case signaller <- syscall.SIGKILL:
-			default:
-			}
-		}
-		logger.Warn("third CTRL-C received. Sending SIGKILL to running jobs. Hit CTRL-C again to kill all subprocesses too")
-
-		<-interruptChannel
-		for _, signaller := range signallers {
-			select {
-			case signaller <- syscall.SIGQUIT:
-			default:
-			}
-			close(signaller)
-		}
-		logger.Warn("fourth CTRL-C received. Sending SIGKILL to running jobs and their subprocesses")
+		defer helpers.Done()
+		escalateInterrupts(ctx, finished, interruptChannel, signallers, stats, cancel)
 	}()
 
 	wg.Wait()
+	// Release the helpers, then wait for them so no goroutine outlives Run.
+	close(finished)
+	helpers.Wait()
 	return context.Cause(ctx)
 }
 
+// reportStatus logs a periodic progress summary until the run finishes or the
+// context is cancelled.
+func reportStatus(ctx context.Context, finished <-chan struct{}, stats *Stats) {
+	// Wait for a tick boundary, so status lines land on predictable times.
+	select {
+	case <-ctx.Done():
+		return
+	case <-finished:
+		return
+	case <-time.After(untilNext(10 * time.Second)):
+	}
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	var lastShown time.Time
+	for {
+		// Repeat an unchanged summary occasionally, so a long-running job does
+		// not leave the user staring at nothing.
+		if stats.ClearDirty() || time.Since(lastShown) >= 10*time.Minute-time.Second {
+			logger.Info(stats.String())
+			lastShown = time.Now()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-finished:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// untilNext reports how long to wait for the next boundary of the given period,
+// so that repeated runs report in lockstep.
+func untilNext(period time.Duration) time.Duration {
+	now := time.Now()
+	target := now.Round(period)
+	if !now.Before(target) {
+		target = target.Add(period)
+	}
+	return time.Until(target)
+}
+
+// escalateInterrupts translates successive interrupts into progressively more
+// forceful signals to the running jobs. It returns once the run has finished.
+func escalateInterrupts(ctx context.Context, finished <-chan struct{}, interrupts <-chan os.Signal, signallers []chan os.Signal, stats *Stats, cancel context.CancelCauseFunc) {
+	// await reports whether another interrupt arrived, as opposed to the run
+	// ending first.
+	//
+	// Only `finished` ends the wait. Waiting on ctx.Done() would be wrong once
+	// escalation is under way, because the first interrupt cancels the context
+	// itself: the later, more forceful steps must still be reachable.
+	await := func() bool {
+		select {
+		case <-interrupts:
+			return true
+		case <-finished:
+			return false
+		}
+	}
+
+	// Before any interrupt arrives, however, a cancelled context does mean
+	// there is nothing left to escalate.
+	awaitFirst := func() bool {
+		select {
+		case <-interrupts:
+			return true
+		case <-finished:
+			return false
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	broadcast := func(sig os.Signal) {
+		for _, signaller := range signallers {
+			select {
+			case signaller <- sig:
+			default:
+			}
+		}
+	}
+
+	if !awaitFirst() {
+		logger.Debug("run finished without an interrupt")
+		return
+	}
+	if stats != nil {
+		stats.Total.Add(-1 * stats.ZeroQueued())
+		stats.SetDirty()
+		if stats.ClearDirty() {
+			logger.Info(stats.String())
+		}
+	}
+	logger.Warn("received cancellation signal. Waiting for current jobs to finish before exiting. Hit CTRL-C again to exit sooner")
+	cancel(ErrUserCancelled)
+
+	if !await() {
+		return
+	}
+	broadcast(syscall.SIGTERM)
+	logger.Warn("second CTRL-C received. Sending SIGTERM to running jobs. Hit CTRL-C again to use SIGKILL instead")
+
+	if !await() {
+		return
+	}
+	broadcast(syscall.SIGKILL)
+	logger.Warn("third CTRL-C received. Sending SIGKILL to running jobs. Hit CTRL-C again to kill all subprocesses too")
+
+	if !await() {
+		return
+	}
+	broadcast(syscall.SIGQUIT)
+	logger.Warn("fourth CTRL-C received. Sending SIGKILL to running jobs and their subprocesses")
+}
+
+// Validate reports whether opts is self-consistent, without running anything.
+// Every returned error wraps ErrInvalidOptions.
+func (opts Opts) Validate() error {
+	if opts.Concurrency < 1 {
+		return fmt.Errorf("%w: concurrency must be at least 1, not %d", ErrInvalidOptions, opts.Concurrency)
+	}
+	if opts.RateLimit != nil {
+		if time.Duration(*opts.RateLimit) < time.Millisecond {
+			return fmt.Errorf("%w: the rate limit must be at least a millisecond, not %v",
+				ErrInvalidOptions, time.Duration(*opts.RateLimit))
+		}
+		if opts.RateLimitBucketSize < 0 {
+			return fmt.Errorf("%w: the rate limit bucket size may not be negative, got %d",
+				ErrInvalidOptions, opts.RateLimitBucketSize)
+		}
+	}
+	if opts.DebounceSuccessesPeriod != nil && !opts.SkipSuccesses {
+		logger.Warn("--debounce-successes has no effect without --skip-successes")
+	}
+	if opts.DebounceFailuresPeriod != nil && !opts.SkipFailures {
+		logger.Warn("--debounce-failures has no effect without --skip-failures")
+	}
+	if opts.DeferDelay != nil && !opts.DeferReruns {
+		logger.Warn("--defer-delay has no effect without --defer-reruns")
+	}
+	return nil
+}
+
+// PrepareAndRun parses the jobs described by reader and executes them according
+// to opts, returning nil only if every job succeeded. If any job failed the
+// error wraps ErrJobsFailed; invalid options wrap ErrInvalidOptions.
 func PrepareAndRun(ctx context.Context, reader io.Reader, opts Opts, commandLine []string, cache Cache, interruptChannel <-chan os.Signal) error {
+	_, err := PrepareAndRunWithStats(ctx, reader, opts, commandLine, cache, interruptChannel)
+	return err
+}
+
+// PrepareAndRunWithStats behaves as PrepareAndRun, additionally returning the
+// statistics gathered during the run. The statistics are valid even when an
+// error is returned, so callers can report what was accomplished.
+func PrepareAndRunWithStats(ctx context.Context, reader io.Reader, opts Opts, commandLine []string, cache Cache, interruptChannel <-chan os.Signal) (*Stats, error) {
+	if err := opts.Validate(); err != nil {
+		return NewStats(1, 0), err
+	}
+	if len(commandLine) == 0 {
+		return NewStats(opts.Concurrency, 0), fmt.Errorf("%w: no command was provided", ErrInvalidOptions)
+	}
+	if cache == nil {
+		return NewStats(opts.Concurrency, 0), fmt.Errorf("%w: a cache is required", ErrInvalidOptions)
+	}
+
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	defer cancelCause(nil)
 	var generator Generator
@@ -145,32 +254,29 @@ func PrepareAndRun(ctx context.Context, reader io.Reader, opts Opts, commandLine
 	} else {
 		generator = SimpleLineGenerator
 	}
+
 	templ, err := ParseCommandline(commandLine)
+	if err != nil {
+		return NewStats(opts.Concurrency, 0), fmt.Errorf("%w: could not parse the command line: %w", ErrInvalidOptions, err)
+	}
 	var input *template.Template
 	if inputString := opts.Input; inputString != nil {
-		if t, err := template.New("Input").Parse(*inputString); err == nil {
-			input = t
-		} else {
-			logger.Error("cannot parse the input template", slog.Any("error", err))
-			os.Exit(1)
+		t, err := template.New("Input").Parse(*inputString)
+		if err != nil {
+			return NewStats(opts.Concurrency, 0), fmt.Errorf("%w: could not parse the input template: %w", ErrInvalidOptions, err)
 		}
-	}
-	if err != nil {
-		logger.Error("Fatal error while parsing the commandline", slog.Any("error", err))
-		os.Exit(1)
+		input = t
 	}
 
 	var limiter *rate.Limiter
 	var minimumDuration time.Duration
 	if opts.RateLimit != nil {
-		minimumDuration = *opts.RateLimit
-		if opts.RateLimitBucketSize < 1 {
-			opts.RateLimitBucketSize = 1
+		minimumDuration = time.Duration(*opts.RateLimit)
+		bucketSize := opts.RateLimitBucketSize
+		if bucketSize < 1 {
+			bucketSize = 1
 		}
-		if *opts.RateLimit < time.Millisecond {
-			return errors.New("rate limit must be at least a millisecond if defined")
-		}
-		limiter = rate.NewLimiter(rate.Every(*opts.RateLimit), opts.RateLimitBucketSize)
+		limiter = rate.NewLimiter(rate.Every(minimumDuration), bucketSize)
 	}
 
 	// initialise the stats collector
@@ -190,8 +296,10 @@ func PrepareAndRun(ctx context.Context, reader io.Reader, opts Opts, commandLine
 			var mostRecentlyLastRun time.Time
 			renderedCommand, err := Render(templ, input, args)
 			if err != nil {
-				logger.Info("could not render", slog.Any("error", err))
-				stats.AddFailed(0)
+				logger.Warn("could not render", slog.Any("error", err))
+				// The job never started, so only the failure counter moves:
+				// AddFailed would also decrement the in-progress count.
+				stats.AddUnstartedFailure()
 				continue
 			}
 			marker := Marker(renderedCommand)
@@ -252,9 +360,17 @@ func PrepareAndRun(ctx context.Context, reader io.Reader, opts Opts, commandLine
 	// provide a summary before exiting
 	logger.Info(stats.String())
 	if errors.Is(err, ErrNoMoreJobs) {
-		return nil
+		err = nil
 	}
-	return err
+	if err != nil {
+		return stats, err
+	}
+	// Jobs which failed are not themselves an error condition during the run,
+	// but the caller needs to know so it can exit with a nonzero status.
+	if failed := stats.Failed.Load(); failed > 0 {
+		return stats, fmt.Errorf("%w: %d of %d", ErrJobsFailed, failed, stats.Total.Load())
+	}
+	return stats, nil
 }
 
 func lessUnsortedCommand(a, b UnsortedCommand) bool {

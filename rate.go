@@ -17,6 +17,11 @@ type etc struct {
 }
 
 func FriendlyDuration(d time.Duration) string {
+	// A negative duration means an estimate overshot; report it as zero rather
+	// than showing the user something like "-58 milliseconds".
+	if d < 0 {
+		d = 0
+	}
 	if d < 2*time.Second {
 		return fmt.Sprintf("%.0f milliseconds", d.Seconds()*1000)
 	}
@@ -38,7 +43,7 @@ func FriendlyDuration(d time.Duration) string {
 	if d < time.Hour*24*1000 {
 		return fmt.Sprintf("%.0f days", d.Seconds()/3600/24)
 	}
-	return fmt.Sprintf("%.1f years", d.Seconds()/3600/365.25)
+	return fmt.Sprintf("%.1f years", d.Seconds()/3600/24/365.25)
 }
 
 func (e *etc) Estimate(stats *Stats) (time.Duration, error) {
@@ -88,17 +93,17 @@ func (e *etc) Estimate(stats *Stats) (time.Duration, error) {
 	// weighted max time
 	wMaxDuration := time.Duration((maxSuccess.Seconds()*pSuccess + maxFailure.Seconds()*(1-pSuccess)) * float64(time.Second))
 	logger.Debug("estimated max", slog.Duration("weighted maximum duration", wMaxDuration), slog.Float64("success", pSuccess), slog.Duration("maximum success", maxSuccess), slog.Duration("maximum failure", maxFailure))
-	// var qet time.Duration
-	if stats.queueEmptyTime.IsZero() {
+	emptiedAt, isEmpty := stats.queueEmptyTime()
+	if !isEmpty {
 		// estimate queue empty time: number of queued items * weighted job run time
-
 		qet := time.Duration(wDurationSeconds * float64(stats.Queued.Load()) / float64(e.concurrency) * float64(time.Second))
 		if lowerLimit := time.Duration(stats.Queued.Load()) * e.minimumDuration; lowerLimit > qet {
 			qet = lowerLimit
 		}
 		return qet + wMaxDuration, nil
 	}
-	return wMaxDuration - time.Since(stats.queueEmptyTime), nil
+	// The queue has drained, so only the jobs still running remain.
+	return wMaxDuration - time.Since(emptiedAt), nil
 }
 
 func NewEtc(concurrency int, minimumDuration time.Duration) *etc {

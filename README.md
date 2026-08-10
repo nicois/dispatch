@@ -2,25 +2,23 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/nicois/dispatch.svg)](https://pkg.go.dev/github.com/nicois/dispatch)
 
-Run multiple variations of a command, controlling concurrency, retries, etc.
+Run many variations of a command. Control the number of concurrent jobs, the retries and more.
 
 ## Features
 
-- run multiple jobs concurrently
-- captures STDOUT and STDERR of each job separately, for both successful and unsuccessful jobs
-- allows job arguments to be described in a variety of formats (one per line, JSON per line, or CSV)
-- sensible console status messages providing a progress summary
-- repeated CTRL-Cs are used to progressively increase jobs' termination priority
+- Runs many jobs at the same time.
+- Records the STDOUT and the STDERR of each job. This applies to successful jobs and to failed jobs.
+- Reads job arguments in three formats: one value per line, one JSON object per line, or CSV.
+- Shows a summary of the progress on the console.
+- Increases the force of each job termination when you press CTRL-C again.
 
-Optionally:
+These functions are optional:
 
-- skips and/or deprioritises jobs which have already been run (unless instructed otherwise, based on time since last successful execution)
-- define timeouts
-- abort on job failure
-- inject STDIN to each job
-- use S3(-compatible) backend to store state
-
-... and more!
+- Skips a job that ran before, or gives it a lower priority. The time of the last successful run controls this behaviour.
+- Stops a job after a timeout.
+- Stops the run if a job fails.
+- Sends the same text to the STDIN of each job.
+- Keeps the state in an S3 bucket, or in a compatible object store.
 
 ## Installation
 
@@ -28,11 +26,14 @@ Optionally:
 go install github.com/nicois/dispatch/dispatch@latest
 ```
 
-The binary will be installed into `~/go/bin/`
+Go puts the program in the `~/go/bin/` directory.
 
 ## Usage
 
 ```
+Application Options:
+      --version                 show the version and exit
+
 preparation:
       --csv                     interpret STDIN as a CSV
       --debounce-failures=      re-run failed jobs outside the debounce period, even if they would normally be skipped
@@ -62,11 +63,29 @@ output:
       --show-stdout             do not suppress each job's STDOUT
 ```
 
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Each job was successful, or was skipped. |
+| 1 | Dispatch could not start the run. The options were not valid, the cache was not available, or the user stopped the run. |
+| 2 | Dispatch ran correctly, but a minimum of one job failed. |
+
+Thus your shell script can find a failed job. The script does not need to read the log messages:
+
+```bash
+$ seq 3 | dispatch -- false ; echo "exit code: $?"
+...
+exit code: 2
+```
+
+`--dry-run` does not run a command. Therefore it always gives the code 0.
+
 ## Examples
 
 #### Basic operation
 
-Run three variations of `echo`, substituting `{{.value}}` with each input line in turn
+This example runs three variations of `echo`. Dispatch replaces `{{.value}}` with each input line.
 
 ```bash
 $ echo -e 'one\ntwo\nthree' \
@@ -77,9 +96,10 @@ Jan 18 11:05:56.643 INF Success elapsed="1 milliseconds" command="{command:[echo
 Jan 18 11:05:56.643 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3; Estimated time remaining: 0 milliseconds
 ```
 
-The stdout and stderr are combined and stored (compressed using zstd) in `~/.cache/dispatch/{success,failure}/*`
+Dispatch puts the STDOUT and the STDERR together in one file. It compresses the file with zstd.
+It keeps the file in the `~/.cache/dispatch/success/` directory or the `~/.cache/dispatch/failure/` directory.
 
-If you want a copy of stderr and stdout to be shown:
+To also show the STDOUT and the STDERR on the console, use these options:
 
 ```bash
 $ echo -e 'one\ntwo\nthree' \
@@ -95,7 +115,7 @@ Jan 18 11:06:13.801 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Abor
 
 #### JSON parsing
 
-Parse each input line as a JSON object (also suppressing the "Success" log entries:
+Dispatch can read each input line as a JSON object. This example also hides the `Success` messages:
 
 ```bash
 $ echo -e '{"animal": "cat", "name": "Scarface Claw"}\n{"animal": "dog", "name": "Bitzer Maloney"}' \
@@ -104,6 +124,8 @@ the cat is called Scarface Claw
 the dog is called Bitzer Maloney
 Jan 18 10:46:26.424 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 ```
+
+If a line is not valid JSON, dispatch shows a warning and skips that line. Thus one bad line does not stop the run.
 
 #### CSV parsing
 
@@ -115,11 +137,15 @@ the dog is called Bitzer Maloney
 Jan 18 10:47:53.144 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Aborted: 0; Total: 2; Estimated time remaining: 0 milliseconds
 ```
 
-#### Status logging
+A row can have a different number of columns than the header. Dispatch shows a warning, but it runs the job.
+If the row is too short, the absent columns become empty text. If the row is too long, dispatch ignores the
+additional columns.
 
-Every 10 seconds an interim status is generated, as well as at completion. An estimate of the remaining time will be shown,
-based solely on the rate of completion of earlier jobs.
-Duplicate status messages, where nothing has changed, will be suppressed for up to a minute.
+#### Status messages
+
+Dispatch shows the status each 10 seconds, and again at the end of the run. The status includes an estimate of
+the remaining time. The estimate uses only the durations of the jobs that are complete.
+If the status did not change, dispatch does not show it again for one minute.
 
 ```bash
 $ seq 1 10 \
@@ -139,9 +165,9 @@ Jan 18 11:07:30.228 INF Success elapsed="4 seconds" command="{command:[bash -c e
 Jan 18 11:07:30.228 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Aborted: 0; Total: 10; Estimated time remaining: 0 milliseconds
 ```
 
-#### Skipping previously-run jobs
+#### How to skip jobs that ran before
 
-If a job has already been attempted, and should not be re-attempted, use `--skip-successes` and/or `--skip-failures` as applicable:
+A job can run one time only. To prevent a second run, use `--skip-successes`, or `--skip-failures`, or both options:
 
 ```bash
 $ seq 2 | dispatch --skip-successes
@@ -159,14 +185,15 @@ Jan 18 11:08:03.523 INF Success elapsed="3 milliseconds" command="{command:[echo
 Jan 18 11:08:03.523 INF Queued: 0; In progress: 0; Succeeded: 3; Failed: 0; Aborted: 0; Total: 3 (+2 skipped); Estimated time remaining: 0 milliseconds
 ```
 
-Notice the `skipped` value in the stats line.
+The status line shows the number of skipped jobs.
 
 #### Debounce period
 
-If you only want to skip jobs which haven't succeeded/failed recently, you can provide a debounce period using `--debounce-successes` and/or `--debounce-failures`.
-Be aware that this period is assessed when the STDIN record is parsed, not when the job is about to start.
+A debounce period makes dispatch skip only the recent jobs. Use `--debounce-successes`, or `--debounce-failures`, or both options.
+Dispatch calculates this period when it reads the line from STDIN. It does not calculate the period at the start of the job.
 
-Below, 2 jobs are run, then 3 more 10 seconds later. With a debounce of 10s, this means the third execution skips the 3 recent jobs:
+This example runs 2 jobs, then 3 more jobs 10 seconds later. The debounce period is 10 seconds.
+Therefore the third command skips the 3 recent jobs:
 
 ```bash
 $ seq 2 | dispatch --skip-successes ; sleep 10; seq 5 | dispatch --skip-successes ; seq 5 | dispatch --skip-successes --debounce-successes 10s
@@ -188,12 +215,13 @@ Jan 18 11:09:29.800 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 0; Abor
 
 ```
 
-#### Deprioritising recently-run jobs
+#### How to give recent jobs a lower priority
 
-By default, jobs are started in the order they are provided via STDIN.
-If desired `--defer-reruns` will notice if a job has been run previously (whether successful or not), and will run other jobs first.
-Where multiple jobs are reruns, priority is given to least recently-run jobs.
-Where jobs have never been run before, the order provided in STDIN is respected.
+Dispatch starts the jobs in the sequence that it reads them from STDIN.
+`--defer-reruns` changes this behaviour. Dispatch finds each job that ran before, and starts the other jobs first.
+The result of the earlier run is not important.
+If more than one job ran before, the job with the oldest run starts first.
+The jobs that did not run before keep their sequence from STDIN.
 
 ```bash
 $ seq 5 | dispatch --concurrency=5 ; seq 10 | dispatch --defer-reruns --concurrency=5
@@ -220,14 +248,14 @@ Jan 18 11:08:55.296 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Abo
 
 ```
 
-To make `--defer-reruns` more effective, a small delay is introduced before jobs start being executed.
-During this period, jobs are collected and sorted, making it more likely that the right jobs will be run first.
-`--defer-delay` can override the length of this delay, which defaults to 100ms.
+`--defer-reruns` includes a short delay before the first job starts.
+In this period, dispatch collects the jobs and sorts them. Thus it is more probable that the correct jobs start first.
+The default delay is 100 milliseconds. `--defer-delay` changes this value.
 
-#### Suppressing success and/or failure messages
+#### How to hide the success and failure messages
 
-If you want a less noisy output, you can suppress success and/or failure messages. STDOUT and STDERR are still logged to
-the filesystem as normal:
+To make the output shorter, hide the success messages, or the failure messages, or both.
+Dispatch continues to write the STDOUT and the STDERR to the cache:
 
 ```bash
 $ seq 1 254 | dispatch --hide-failures --concurrency 100 --timeout 10s -- nc -vz 192.168.4.{{.value}} 443
@@ -237,9 +265,10 @@ Jan 18 11:10:34.277 INF Success elapsed="13 milliseconds" command="{command:[nc 
 Jan 18 11:10:37.528 INF Queued: 0; In progress: 0; Succeeded: 2; Failed: 252; Aborted: 0; Total: 254; Estimated time remaining: 0 milliseconds
 ```
 
-### Rate limiting
+### How to limit the rate
 
-Sometimes, despite wanting to run jobs concurrently, you want to place a limit on the maximum rate jobs can be started at. For example, you might want to run 4 jobs at a time, but wait 2 seconds between them:
+You can run jobs at the same time, and also limit how frequently a new job starts.
+In this example, 4 jobs run at the same time, but each new job waits 2 seconds:
 
 ```bash
 $ seq 1 5 | dispatch --rate-limit 2s --concurrency 4
@@ -252,9 +281,10 @@ Jan 18 11:11:18.859 INF Success elapsed="4 milliseconds" command="{command:[echo
 Jan 18 11:11:18.859 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Aborted: 0; Total: 5; Estimated time remaining: 0 milliseconds
 ```
 
-If bursting is acceptable, `--rate-limit-bucket-size` allows this.
+`--rate-limit-bucket-size` permits a group of jobs to start together.
 
-For example, if you want to issue some API commands, ensuring no more than 1 is started per second, with a burst of 3 (but allowing 4 to run concurrently):
+This example sends API commands. One command starts each second, but a group of 3 can start together.
+A maximum of 4 commands run at the same time:
 
 ```bash
 $ seq 1 5 | dispatch --rate-limit 1s --concurrency 4 --rate-limit-bucket-size 3
@@ -269,8 +299,8 @@ Jan 18 11:11:24.646 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 0; Abor
 
 ### Dry-run
 
-Want to ensure the right command will be run with the correct inputs? `--dry-run` will do this. Nothing will actually be executed.
-An implicit 1 second sleep will be substituted for the actual execution of each command:
+`--dry-run` shows you the commands and their inputs. Dispatch does not run a command.
+In place of each command, dispatch waits 1 second:
 
 ```bash
 $ seq 8 | dispatch --dry-run --debounce-successes 5s --concurrency 1 --input y -- rm -f foo.{{.value}}
@@ -285,16 +315,14 @@ Jan 18 11:12:08.734 INF Success elapsed="1001 milliseconds" command="{command:[r
 Jan 18 11:12:08.734 INF Queued: 0; In progress: 0; Succeeded: 8; Failed: 0; Aborted: 0; Total: 8; Estimated time remaining: 0 milliseconds
 ```
 
-### Shuffle / randomise
+### How to use a random sequence
 
-Usually, if you want to run the jobs in a random order, you can pipe STDIN via `shuf` beforehand.
-However, if the source of jobs is dynamic, you might not want to wait until all jobs are generated before
-any jobs are started.
+To run the jobs in a random sequence, you can usually send STDIN through `shuf` first.
+But sometimes another program makes the jobs slowly. Then you do not want to wait for all of the jobs.
 
-`--shuffle` will disregard the order in which jobs were received, but will work as expected with respect to
-`--defer-reruns`. This means your jobs will start being processed without delay, and reruns will still be
-run only after new jobs, but the new jobs will be run in a random order. (The rerun jobs are not randomised,
-as they are selected based on the time the job was last attempted.)
+`--shuffle` ignores the sequence of the jobs from STDIN. It also operates correctly with `--defer-reruns`.
+Thus the first job starts immediately, and the new jobs run in a random sequence.
+The jobs that ran before continue to run last. Their sequence stays the same, because the time of the last run controls it.
 
 ```bash
 $ seq 5 | dispatch --shuffle --defer-reruns
@@ -324,7 +352,7 @@ Jan 18 11:58:24.004 INF Queued: 0; In progress: 0; Succeeded: 10; Failed: 0; Abo
 
 ### Job cancellations and timeouts
 
-Defining a timeout will cause jobs to be terminated if it is reached:
+If you set a timeout, dispatch stops each job that runs for longer than this period:
 
 ```bash
 $ seq 1 7 \
@@ -341,12 +369,11 @@ Jan 18 11:04:28.387 INF Queued: 0; In progress: 0; Succeeded: 4; Failed: 3; Abor
 
 ```
 
-Cancelling (e.g. with CTRL-C) while running will stop any further jobs from being started, and will exit
-when all currently-running jobs have completed.
-Pressing CTRL-C a second time will send SIGTERM to all running jobs.
-A third CTRL-C will send SIGKILL to all remaining running jobs.
-A fourth and final CTRL-C will send SIGKILL to all remaining running jobs, as well as other processes in
-their process groups.
+Press CTRL-C to stop the run. Dispatch does not start a new job. It stops when the current jobs are complete.
+Press CTRL-C a second time. Dispatch sends SIGTERM to each job that runs.
+Press CTRL-C a third time. Dispatch sends SIGKILL to each job that runs.
+Press CTRL-C a fourth time. Dispatch sends SIGKILL to each job that runs, and to the other processes in the
+process group of the job.
 
 ```bash
 $ seq 80 | dispatch --concurrency 5 --defer-reruns  -- bash -c 'trap noop SIGTERM ; sleep {{.value}}'
@@ -369,7 +396,7 @@ Jan 18 11:59:34.050 WRN Failure elapsed="7 seconds" command="{command:[bash -c t
 Jan 18 11:59:34.050 INF Queued: 0; In progress: 0; Succeeded: 5; Failed: 2; Aborted: 0; Total: 7; Estimated time remaining: 0 milliseconds
 ```
 
-If you want to stop processing if a job fails, use `--abort-on-error`:
+To stop the run when a job fails, use `--abort-on-error`:
 
 ```bash
 $ seq 1 10 \
@@ -386,10 +413,10 @@ Jan 18 12:00:25.999 INF Queued: 4; In progress: 0; Succeeded: 4; Failed: 2; Abor
 Jan 18 12:00:25.999 ERR nonzero exit code
 ```
 
-### Simulating STDIN
+### How to send text to STDIN
 
-If each job expects input from STDIN, this can be supplied with `--input` (similar to the `yes` command).
-Note that the input text can be the same for each job, or can be parameterised using the same inputs as the command itself:
+A job can read text from STDIN. Use `--input` to send this text. The behaviour is similar to the `yes` command.
+The text can be the same for each job. The text can also include the same variables as the command:
 
 ```bash
 $ echo -e 'animal,name,emotion\ncat,Scarface Claw,hungry' \
@@ -399,18 +426,77 @@ Jan 18 12:02:08.154 INF Queued: 0; In progress: 0; Succeeded: 1; Failed: 0; Abor
 
 ```
 
-### Caching results
+### How to keep the results
 
-By default, `~/.cache/dispatch` is used to store the STDOUT/STDERR of each job, along with whether it succeeded.
-An alternative location can be provided using `--cache-location`.
+Dispatch keeps the STDOUT and the STDERR of each job in the `~/.cache/dispatch` directory. It also keeps the
+result of the job. To use a different directory, use `--cache-location`.
 
-#### S3 caching
+#### How to keep the results in S3
 
-It is possible to use a S3 bucket to cache the results: `--cache-location s3://my-bucket/my-prefix`
+Dispatch can keep the results in an S3 bucket: `--cache-location s3://my-bucket/my-prefix`
 
-As long as you have valid AWS environment variables/credentials, this should "just work". You may also need to ensure that the `AWS_REGION` environment variable is set correctly.
-Note that metadata (filename, last-modified time) for all assets in the S3 bucket under the nominated prefix will be read each time the application is run.
-For more than a few thousand records, this may take a few seconds. This data is stored in a temporary sqlite database,
-which is deleted when the process exits.
+You must have valid AWS credentials. Set the `AWS_REGION` environment variable to the correct value.
 
-If an error is detected while writing to the S3 bucket, this will stop subsequent jobs from running. The most likely cause is your AWS credentials have expired.
+At the start of each run, dispatch reads the metadata of each object below the prefix. The metadata includes
+the name of the object and the time of the last change. If there are more than a few thousand objects, this
+operation can take a few seconds. Dispatch keeps this data in a temporary SQLite database. It deletes the
+database at the end of the run.
+
+If dispatch cannot write to the S3 bucket, it stops the run. Usually, the cause is expired AWS credentials.
+
+If the `AWS_EXPIRY_TIME` environment variable holds an RFC 3339 time, dispatch stops 5 minutes before that
+time. Thus the current jobs can be complete, and dispatch can record their results.
+
+### Periods of time
+
+Five options take a period of time: `--timeout`, `--rate-limit`, `--debounce-successes`, `--debounce-failures`
+and `--defer-delay`. Each of these options accepts the usual Go units, for example `500ms`, `90s`, `1m30s` or `2h`.
+Each option also accepts a number of days at the start of the value, for example `3d` or `1d12h`.
+
+## How to use dispatch as a library
+
+A Go program can use the same functions:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"os"
+	"strings"
+
+	"github.com/nicois/dispatch"
+)
+
+func main() {
+	cache, err := dispatch.NewFileCache("/tmp/my-cache")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var opts dispatch.Opts
+	opts.Concurrency = 4
+
+	err = dispatch.PrepareAndRun(context.Background(), strings.NewReader("1\n2\n3\n"),
+		opts, []string{"echo", "value is {{.value}}"}, cache, make(chan os.Signal, 1))
+	if errors.Is(err, dispatch.ErrJobsFailed) {
+		log.Println("some jobs failed:", err)
+	} else if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`PrepareAndRunWithStats` also returns the statistics of the run. These statistics are correct even if the
+function returns an error.
+
+To make the jobs in your program, and not read them from a stream, use `NewRenderedCommand`. Use `WithInput`
+to add text for the STDIN of the job. Then send the jobs to `Run`.
+
+`SetLogger` selects the destination of the log messages. If you do not call `SetLogger`, dispatch does not
+write log messages.
+
+`PrepareAndRun` and `Run` stop each of their goroutines before they return. Therefore a program that runs for a
+long time can call these functions many times.

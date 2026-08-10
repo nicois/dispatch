@@ -1,0 +1,55 @@
+version: 2
+
+project_name: dispatch
+
+builds:
+  - id: dispatch
+    main: .
+    binary: dispatch
+    env:
+      # No cgo is required, which keeps the binaries statically linked and
+      # portable across distributions.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: dispatch
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - src: ../README.md
+        info:
+          mode: 0644
+      - src: ../LICENCE.txt
+        info:
+          mode: 0644
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "bump dependencies"

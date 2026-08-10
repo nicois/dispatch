@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,11 +24,16 @@ type fileCache struct {
 	root string
 }
 
-func NewFileCache(root string) *fileCache {
-	result := &fileCache{root: root}
-	Must0(os.MkdirAll(filepath.Join(root, "success"), 0700))
-	Must0(os.MkdirAll(filepath.Join(root, "failure"), 0700))
-	return result
+// NewFileCache returns a Cache which records job outcomes as files beneath root.
+// The required subdirectories are created if they do not already exist.
+func NewFileCache(root string) (Cache, error) {
+	if err := os.MkdirAll(filepath.Join(root, "success"), 0o700); err != nil {
+		return nil, fmt.Errorf("could not create the success cache directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "failure"), 0o700); err != nil {
+		return nil, fmt.Errorf("could not create the failure cache directory: %w", err)
+	}
+	return &fileCache{root: root}, nil
 }
 
 func (f *fileCache) successPath(marker string) string {
@@ -47,19 +53,25 @@ func (f *fileCache) WriteFailure(ctx context.Context, marker string, data []byte
 }
 
 func (f *fileCache) SuccessModTime(ctx context.Context, marker string) (time.Time, error) {
-	stat, err := os.Stat(f.successPath(marker))
-	if err == nil {
-		return stat.ModTime(), nil
-	}
-	return time.Time{}, ErrNotFound
+	return modTime(f.successPath(marker))
 }
 
 func (f *fileCache) FailureModTime(ctx context.Context, marker string) (time.Time, error) {
-	stat, err := os.Stat(f.failurePath(marker))
+	return modTime(f.failurePath(marker))
+}
+
+// modTime reports when the given path was last written. A missing path yields
+// ErrNotFound; any other failure is returned as-is, so that a genuine I/O
+// problem is not mistaken for "this job has never been run".
+func modTime(path string) (time.Time, error) {
+	stat, err := os.Stat(path)
 	if err == nil {
 		return stat.ModTime(), nil
 	}
-	return time.Time{}, ErrNotFound
+	if errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, ErrNotFound
+	}
+	return time.Time{}, err
 }
 
 func (f *fileCache) ReadSuccess(ctx context.Context, marker string) ([]byte, error) {
